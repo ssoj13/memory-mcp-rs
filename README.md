@@ -2,6 +2,10 @@
 
 High-performance Rust implementation of the MCP Memory Server - a knowledge graph for persistent Claude memory.
 
+## Original Project
+
+This is a Rust port of the [Model Context Protocol Servers](https://github.com/modelcontextprotocol/servers) memory server. The original TypeScript implementation can be found in the [official MCP servers repository](https://github.com/modelcontextprotocol/servers/tree/main/src/memory).
+
 ## Features
 
 - **SQLite Backend:** Fast, reliable, ACID-compliant storage
