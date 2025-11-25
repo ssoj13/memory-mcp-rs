@@ -5,6 +5,11 @@ edition = "2021"
 authors = ["MCP Community"]
 license = "MIT"
 description = "SQLite-based knowledge graph MCP server for persistent memory"
+repository = "https://github.com/ssoj13/memory-mcp-rs"
+homepage = "https://github.com/ssoj13/memory-mcp-rs"
+keywords = ["mcp", "memory", "server", "protocol", "llm"]
+categories = ["command-line-utilities", "filesystem"]
+readme = "README.md"
 
 [[bin]]
 name = "memory-mcp-rs"
