@@ -72,7 +72,7 @@ impl MemoryServer {
 
         Ok(CallToolResult {
             content: vec![Content::text(&summary)],
-            structured_content: Some(json!(created)),
+            structured_content: Some(json!({"entities": created})),
             is_error: Some(false),
             meta: None,
         })
@@ -97,7 +97,7 @@ impl MemoryServer {
 
         Ok(CallToolResult {
             content: vec![Content::text(&summary)],
-            structured_content: Some(json!(created)),
+            structured_content: Some(json!({"relations": created})),
             is_error: Some(false),
             meta: None,
         })
@@ -124,7 +124,7 @@ impl MemoryServer {
 
         Ok(CallToolResult {
             content: vec![Content::text(&summary)],
-            structured_content: Some(json!(results)),
+            structured_content: Some(json!({"results": results})),
             is_error: Some(false),
             meta: None,
         })
