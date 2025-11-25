@@ -52,6 +52,15 @@ fn validate_observation(obs: &str) -> Result<()> {
     Ok(())
 }
 
+/// Build SQL placeholders for IN queries (?1, ?2, ?3, ...)
+/// offset: starting placeholder number (default 1)
+fn build_placeholders(count: usize, offset: usize) -> String {
+    (offset..offset + count)
+        .map(|i| format!("?{}", i))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Validate database file path
 fn validate_db_path(path: &Path) -> Result<()> {
     // Check file extension FIRST (before any filesystem operations)
@@ -89,6 +98,10 @@ CREATE INDEX IF NOT EXISTS idx_entity_type ON entities(entity_type);
 CREATE INDEX IF NOT EXISTS idx_from ON relations(from_entity);
 CREATE INDEX IF NOT EXISTS idx_to ON relations(to_entity);
 CREATE INDEX IF NOT EXISTS idx_relation_type ON relations(relation_type);
+
+-- Compound indexes for complex queries
+CREATE INDEX IF NOT EXISTS idx_relations_from_type ON relations(from_entity, relation_type);
+CREATE INDEX IF NOT EXISTS idx_relations_to_type ON relations(to_entity, relation_type);
 
 -- FTS5 virtual table for full-text search
 CREATE VIRTUAL TABLE IF NOT EXISTS entities_fts USING fts5(
@@ -351,12 +364,7 @@ impl Database {
         let conn = self.pool.get()
             .context("Failed to get database connection from pool")?;
 
-        // Prepare placeholders: ?1, ?2, ?3, ...
-        let placeholders = (1..=names.len())
-            .map(|i| format!("?{}", i))
-            .collect::<Vec<_>>()
-            .join(", ");
-
+        let placeholders = build_placeholders(names.len(), 1);
         let query = format!("DELETE FROM entities WHERE name IN ({})", placeholders);
 
         let params: Vec<&dyn rusqlite::ToSql> = names.iter()
@@ -512,8 +520,23 @@ impl Database {
             }
             entities
         } else {
-            // All entities
-            self.read_graph()?.entities
+            // All entities - direct read without extra call
+            let mut stmt = conn.prepare("SELECT name, entity_type, observations FROM entities")?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?;
+
+            let mut entities = Vec::new();
+            for row in rows {
+                let (name, entity_type, obs_json) = row?;
+                let observations: Vec<String> = serde_json::from_str(&obs_json)?;
+                entities.push(Entity { name, entity_type, observations });
+            }
+            entities
         };
 
         // Filter relations (only between found entities)
@@ -522,15 +545,8 @@ impl Database {
 
         let mut relations = Vec::new();
         if !entity_names.is_empty() {
-            let placeholders_from = (1..=entity_names.len())
-                .map(|i| format!("?{}", i))
-                .collect::<Vec<_>>()
-                .join(", ");
-
-            let placeholders_to = ((entity_names.len() + 1)..=(entity_names.len() * 2))
-                .map(|i| format!("?{}", i))
-                .collect::<Vec<_>>()
-                .join(", ");
+            let placeholders_from = build_placeholders(entity_names.len(), 1);
+            let placeholders_to = build_placeholders(entity_names.len(), entity_names.len() + 1);
 
             let query = format!(
                 "SELECT from_entity, to_entity, relation_type FROM relations
@@ -576,10 +592,7 @@ impl Database {
 
         let conn = self.pool.get()?;
 
-        let placeholders = (1..=names.len())
-            .map(|i| format!("?{}", i))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let placeholders = build_placeholders(names.len(), 1);
 
         // Get entities
         let query = format!(
@@ -608,15 +621,8 @@ impl Database {
         }
 
         // Get relations
-        let placeholders_from = (1..=names.len())
-            .map(|i| format!("?{}", i))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let placeholders_to = ((names.len() + 1)..=(names.len() * 2))
-            .map(|i| format!("?{}", i))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let placeholders_from = build_placeholders(names.len(), 1);
+        let placeholders_to = build_placeholders(names.len(), names.len() + 1);
 
         let query = format!(
             "SELECT from_entity, to_entity, relation_type FROM relations
