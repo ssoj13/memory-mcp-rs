@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use anyhow::Result;
 use crate::storage::Database;
 use crate::graph::{Entity, Relation, KnowledgeGraph, ObservationInput, ObservationResult, ObservationDeletion};
@@ -8,7 +7,7 @@ use crate::graph::{Entity, Relation, KnowledgeGraph, ObservationInput, Observati
 /// Manager for knowledge graph operations
 /// Provides async API wrapping SQLite database
 pub struct KnowledgeGraphManager {
-    db: Arc<Mutex<Database>>,
+    db: Arc<Database>,
 }
 
 impl KnowledgeGraphManager {
@@ -16,61 +15,52 @@ impl KnowledgeGraphManager {
     pub fn new(db_path: PathBuf) -> Result<Self> {
         let db = Database::open(&db_path)?;
         Ok(Self {
-            db: Arc::new(Mutex::new(db)),
+            db: Arc::new(db),
         })
     }
 
     /// Create entities (returns only newly created entities)
     pub async fn create_entities(&self, entities: Vec<Entity>) -> Result<Vec<Entity>> {
-        let db = self.db.lock().await;
-        db.create_entities(&entities)
+        self.db.create_entities(&entities)
     }
 
     /// Create relations (returns only newly created relations)
     pub async fn create_relations(&self, relations: Vec<Relation>) -> Result<Vec<Relation>> {
-        let db = self.db.lock().await;
-        db.create_relations(&relations)
+        self.db.create_relations(&relations)
     }
 
     /// Add observations to multiple entities (batch operation)
     pub async fn add_observations(&self, inputs: Vec<ObservationInput>) -> Result<Vec<ObservationResult>> {
-        let db = self.db.lock().await;
-        db.add_observations(&inputs)
+        self.db.add_observations(&inputs)
     }
 
     /// Delete entities (cascade deletes relations via FOREIGN KEY)
     pub async fn delete_entities(&self, names: Vec<String>) -> Result<usize> {
-        let db = self.db.lock().await;
-        db.delete_entities(&names)
+        self.db.delete_entities(&names)
     }
 
     /// Delete observations from multiple entities (batch operation)
     pub async fn delete_observations(&self, deletions: Vec<ObservationDeletion>) -> Result<()> {
-        let db = self.db.lock().await;
-        db.delete_observations(&deletions)
+        self.db.delete_observations(&deletions)
     }
 
     /// Delete relations
     pub async fn delete_relations(&self, relations: Vec<Relation>) -> Result<usize> {
-        let db = self.db.lock().await;
-        db.delete_relations(&relations)
+        self.db.delete_relations(&relations)
     }
 
     /// Read entire knowledge graph
     pub async fn read_graph(&self) -> Result<KnowledgeGraph> {
-        let db = self.db.lock().await;
-        db.read_graph()
+        self.db.read_graph()
     }
 
     /// Search nodes using FTS5 full-text search
     pub async fn search_nodes(&self, query: Option<String>) -> Result<KnowledgeGraph> {
-        let db = self.db.lock().await;
-        db.search_nodes(query.as_deref())
+        self.db.search_nodes(query.as_deref())
     }
 
     /// Open specific nodes by names
     pub async fn open_nodes(&self, names: Vec<String>) -> Result<KnowledgeGraph> {
-        let db = self.db.lock().await;
-        db.open_nodes(&names)
+        self.db.open_nodes(&names)
     }
 }

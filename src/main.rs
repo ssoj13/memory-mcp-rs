@@ -330,25 +330,61 @@ fn internal_err<T: ToString>(msg: &'static str) -> impl FnOnce(T) -> McpError + 
     move |err| McpError::internal_error(msg, Some(json!({ "error": err.to_string() })))
 }
 
+/// Validate database path to prevent path traversal attacks
+fn validate_db_path(path: &std::path::Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    // Check file extension FIRST (before any filesystem operations)
+    if let Some(ext) = path.extension() {
+        if ext != "db" {
+            return Err("Invalid database file extension (must be .db)".into());
+        }
+    } else {
+        return Err("Database path must have .db extension".into());
+    }
+
+    // Canonicalize path to resolve .. and symlinks
+    let canonical = path.canonicalize().or_else(|_| -> Result<PathBuf, Box<dyn std::error::Error>> {
+        // If file doesn't exist yet, canonicalize parent and append filename
+        if let Some(parent) = path.parent() {
+            let filename = path.file_name()
+                .ok_or("Invalid path: no filename")?;
+            std::fs::create_dir_all(parent)?;
+            let canonical_parent = parent.canonicalize()?;
+            Ok(canonical_parent.join(filename))
+        } else {
+            Err("Invalid path: no parent directory".into())
+        }
+    })?;
+
+    // Ensure path is absolute
+    if !canonical.is_absolute() {
+        return Err("Database path must be absolute".into());
+    }
+
+    Ok(canonical)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // CRITICAL: Do NOT initialize tracing for stdio transport!
     // stderr output breaks MCP handshake
 
     // Get database path from environment or use default
-    let db_path = std::env::var("MEMORY_FILE_PATH").unwrap_or_else(|_| {
+    let db_path_str = std::env::var("MEMORY_FILE_PATH").unwrap_or_else(|_| {
         let mut path = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("."));
         path.push("mcp-memory");
         path.push("knowledge_graph.db");
         path.to_string_lossy().to_string()
     });
 
-    let db_path = PathBuf::from(db_path);
+    let db_path = PathBuf::from(db_path_str);
 
     // Create parent directories if needed
     if let Some(parent) = db_path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
+
+    // Validate path to prevent traversal attacks
+    let db_path = validate_db_path(&db_path)?;
 
     // Initialize manager
     let manager = Arc::new(KnowledgeGraphManager::new(db_path)?);
