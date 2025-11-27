@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use clap::Parser;
 use rmcp::{
     ErrorData as McpError, ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -13,11 +14,38 @@ use serde::Deserialize;
 use serde_json::json;
 
 mod graph;
+mod logging;
 mod manager;
 mod storage;
 
 use graph::{Entity, Relation, ObservationInput, ObservationDeletion};
+use logging::{init_logging, TransportMode};
 use manager::KnowledgeGraphManager;
+
+/// Command-line arguments
+#[derive(Parser, Debug)]
+#[command(author, version, about)]
+struct Args {
+    /// Database file path (default: system data dir/mcp-memory/knowledge_graph.db or MEMORY_FILE_PATH env)
+    #[arg(long)]
+    db_path: Option<PathBuf>,
+
+    /// Enable streamable HTTP mode (default: stdio)
+    #[arg(short = 's', long = "stream")]
+    stream_mode: bool,
+
+    /// HTTP port for stream mode
+    #[arg(short = 'p', long, default_value = "8000")]
+    port: u16,
+
+    /// Bind address for stream mode
+    #[arg(short = 'b', long, default_value = "127.0.0.1")]
+    bind: String,
+
+    /// Enable file logging. Optionally specify log file name (default: memory-mcp-rs.log)
+    #[arg(short = 'l', long, value_name = "FILE", num_args = 0..=1, default_missing_value = "memory-mcp-rs.log")]
+    log: Option<String>,
+}
 
 #[derive(Clone)]
 struct MemoryServer {
@@ -330,6 +358,50 @@ fn internal_err<T: ToString>(msg: &'static str) -> impl FnOnce(T) -> McpError + 
     move |err| McpError::internal_error(msg, Some(json!({ "error": err.to_string() })))
 }
 
+/// Run server in stdio mode (default)
+async fn run_stdio_mode(server: MemoryServer) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = stdio();
+    let svc = server.serve(transport).await?;
+    svc.waiting().await?;
+    Ok(())
+}
+
+/// Run server in streamable HTTP mode
+async fn run_stream_mode(
+    server: MemoryServer,
+    bind: &str,
+    port: u16,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use rmcp::transport::StreamableHttpService;
+    use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+
+    let addr = format!("{}:{}", bind, port);
+    tracing::info!("Starting MCP HTTP server on http://{}/mcp", addr);
+
+    // Create service with session management
+    let service = StreamableHttpService::new(
+        move || Ok(server.clone()),
+        LocalSessionManager::default().into(),
+        Default::default(),
+    );
+
+    // Build router with MCP endpoint and health check
+    let router = axum::Router::new()
+        .nest_service("/mcp", service)
+        .route("/health", axum::routing::get(|| async { "OK" }));
+
+    let tcp_listener = tokio::net::TcpListener::bind(&addr).await?;
+
+    // Start server with graceful shutdown
+    axum::serve(tcp_listener, router)
+        .with_graceful_shutdown(async {
+            tokio::signal::ctrl_c().await.ok();
+        })
+        .await?;
+
+    Ok(())
+}
+
 /// Validate database path to prevent path traversal attacks
 fn validate_db_path(path: &std::path::Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
     // Check file extension FIRST (before any filesystem operations)
@@ -365,18 +437,29 @@ fn validate_db_path(path: &std::path::Path) -> Result<PathBuf, Box<dyn std::erro
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // CRITICAL: Do NOT initialize tracing for stdio transport!
-    // stderr output breaks MCP handshake
+    let args = Args::parse();
 
-    // Get database path from environment or use default
-    let db_path_str = std::env::var("MEMORY_FILE_PATH").unwrap_or_else(|_| {
+    // Determine transport mode
+    let mode = if args.stream_mode {
+        TransportMode::Stream
+    } else {
+        TransportMode::Stdio
+    };
+
+    // Initialize logging based on mode
+    // CRITICAL: stdio mode MUST NOT log to stderr by default!
+    // Any stderr output during handshake causes "connection closed" in MCP clients
+    init_logging(mode, args.log)?;
+
+    // Get database path from args or environment or use default
+    let db_path = args.db_path.or_else(|| {
+        std::env::var("MEMORY_FILE_PATH").ok().map(PathBuf::from)
+    }).unwrap_or_else(|| {
         let mut path = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("."));
         path.push("mcp-memory");
         path.push("knowledge_graph.db");
-        path.to_string_lossy().to_string()
+        path
     });
-
-    let db_path = PathBuf::from(db_path_str);
 
     // Create parent directories if needed
     if let Some(parent) = db_path.parent() {
@@ -392,10 +475,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create server
     let server = MemoryServer::new(manager);
 
-    // Run server with stdio transport
-    let transport = stdio();
-    let svc = server.serve(transport).await?;
-    svc.waiting().await?;
-
-    Ok(())
+    // Run in selected mode
+    match mode {
+        TransportMode::Stdio => run_stdio_mode(server).await,
+        TransportMode::Stream => run_stream_mode(server, &args.bind, args.port).await,
+    }
 }

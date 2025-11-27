@@ -26,22 +26,79 @@ cargo build --release
 
 The binary will be at `target/release/memory-mcp-rs` (or `.exe` on Windows).
 
+## Transport Modes
+
+The server supports two transport modes:
+
+### stdio Mode (Default)
+- **Use case:** Local MCP clients (Claude Desktop, Claude Code, Codex)
+- **Protocol:** JSON-RPC over stdin/stdout
+- **Logging:** Silent by default (prevents MCP handshake issues), optional file logging with `--log`
+- **Command:** `memory-mcp-rs` or `memory-mcp-rs --log server.log`
+
+### HTTP Stream Mode
+- **Use case:** Remote access, web applications, debugging, testing
+- **Protocol:** HTTP with Server-Sent Events (SSE)
+- **Endpoints:**
+  - `/mcp` - MCP protocol endpoint
+  - `/health` - Health check (returns "OK")
+- **Logging:** Always enabled to stderr, optional file logging with `--log`
+- **Command:** `memory-mcp-rs --stream --port 8000`
+
 ## Usage
 
-### Standalone
+### CLI Options
+
+```
+Usage: memory-mcp-rs [OPTIONS]
+
+Options:
+      --db-path <DB_PATH>    Database file path (default: system data dir or MEMORY_FILE_PATH env)
+  -s, --stream               Enable streamable HTTP mode (default: stdio)
+  -p, --port <PORT>          HTTP port for stream mode [default: 8000]
+  -b, --bind <BIND>          Bind address for stream mode [default: 127.0.0.1]
+  -l, --log [<FILE>]         Enable file logging [default: memory-mcp-rs.log]
+  -h, --help                 Print help
+  -V, --version              Print version
+```
+
+### stdio Mode Examples
 
 ```bash
 # Default path: %LOCALAPPDATA%/mcp-memory/knowledge_graph.db (Windows)
 # or ~/.local/share/mcp-memory/knowledge_graph.db (Linux/Mac)
 memory-mcp-rs
 
-# Custom database path
+# Custom database path (CLI flag)
+memory-mcp-rs --db-path /path/to/graph.db
+
+# Custom database path (environment variable)
 MEMORY_FILE_PATH=/path/to/graph.db memory-mcp-rs
+
+# With file logging (for debugging)
+memory-mcp-rs --log debug.log
+```
+
+### HTTP Stream Mode Examples
+
+```bash
+# Start HTTP server on default port 8000
+memory-mcp-rs --stream
+
+# Custom port and bind address
+memory-mcp-rs --stream --port 9000 --bind 0.0.0.0
+
+# With logging to both console and file
+memory-mcp-rs --stream --log server.log
+
+# Health check
+curl http://localhost:8000/health
+# Returns: OK
 ```
 
 ### With Claude Desktop
 
-Add to your Claude Desktop MCP config:
+**stdio mode** - Add to MCP config:
 
 **Windows** (`%APPDATA%\Claude\claude_desktop_config.json`):
 ```json
@@ -65,6 +122,56 @@ Add to your Claude Desktop MCP config:
 }
 ```
 
+### With Claude Code
+
+**stdio mode** - Add to `.claude/mcp.json`:
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "memory-mcp-rs",
+      "args": []
+    }
+  }
+}
+```
+
+**HTTP stream mode** - Start server separately, then configure:
+```bash
+# Terminal 1: Start HTTP server
+memory-mcp-rs --stream --port 8000
+
+# Terminal 2: Add to .claude/mcp.json
+{
+  "mcpServers": {
+    "memory-http": {
+      "url": "http://localhost:8000/mcp"
+    }
+  }
+}
+```
+
+### With Codex
+
+**stdio mode** - Add to Codex MCP config:
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "memory-mcp-rs"
+    }
+  }
+}
+```
+
+**HTTP stream mode** - Start server separately:
+```bash
+# Terminal 1: Start HTTP server
+memory-mcp-rs --stream --port 8000 --log server.log
+
+# Terminal 2: Configure Codex to use http://localhost:8000/mcp
+```
+
 ## MCP Tools
 
 | Tool | Description |
@@ -83,7 +190,8 @@ Add to your Claude Desktop MCP config:
 
 ```
 src/
-├── main.rs       # MCP server + tool routing
+├── main.rs       # MCP server + tool routing + dual-mode transport
+├── logging.rs    # Transport-aware logging (stdio vs HTTP)
 ├── graph.rs      # Data structures (Entity, Relation, KnowledgeGraph)
 ├── manager.rs    # Async manager wrapping storage
 └── storage.rs    # SQLite implementation
@@ -127,10 +235,20 @@ CREATE VIRTUAL TABLE entities_fts USING fts5(
 ## Testing
 
 ```bash
+# Run all tests (integration + HTTP transport)
 cargo test
+
+# Run only integration tests
+cargo test --test integration
+
+# Run only HTTP transport tests
+cargo test --test http_transport
 ```
 
-All tests use temporary databases and clean up automatically.
+**Test coverage:**
+- 23 integration tests (SQLite, CRUD, FTS5, validation)
+- 4 HTTP transport tests (health check, endpoints, logging)
+- All tests use temporary databases and clean up automatically
 
 ## Example Usage
 
