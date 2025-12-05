@@ -5,6 +5,7 @@ use anyhow::{bail, Context, Result};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, Connection, OptionalExtension};
+use std::collections::HashSet;
 use std::path::Path;
 
 // Validation constants (chosen for practical limits while preventing abuse)
@@ -712,8 +713,7 @@ impl Database {
             return Ok(Vec::new());
         }
 
-        let entity_names: std::collections::HashSet<_> =
-            entities.iter().map(|e| &e.name).collect();
+        let entity_names: HashSet<_> = entities.iter().map(|e| &e.name).collect();
 
         let placeholders_from = build_placeholders(entity_names.len(), 1);
         let placeholders_to = build_placeholders(entity_names.len(), entity_names.len() + 1);
@@ -749,7 +749,7 @@ impl Database {
         Ok(relations)
     }
 
-    /// Open specific nodes
+    /// Open specific nodes by names
     pub fn open_nodes(&self, names: &[String]) -> Result<KnowledgeGraph> {
         if names.is_empty() {
             return Ok(KnowledgeGraph::default());
@@ -760,11 +760,34 @@ impl Database {
             validate_name(name, "Entity name")?;
         }
 
-        let conn = self.pool.get()?;
+        let conn = self
+            .pool
+            .get()
+            .context("Failed to get database connection from pool")?;
 
+        // Get entities by names
+        let entities = self
+            .read_entities_by_names(&conn, names)
+            .context("Failed to read entities")?;
+
+        // Reuse get_relations_between for relation fetching
+        let relations = self
+            .get_relations_between(&conn, &entities)
+            .context("Failed to get relations")?;
+
+        Ok(KnowledgeGraph {
+            entities,
+            relations,
+        })
+    }
+
+    /// Helper: read entities by specific names
+    fn read_entities_by_names(
+        &self,
+        conn: &Connection,
+        names: &[String],
+    ) -> Result<Vec<Entity>> {
         let placeholders = build_placeholders(names.len(), 1);
-
-        // Get entities
         let query = format!(
             "SELECT name, entity_type, observations FROM entities WHERE name IN ({})",
             placeholders
@@ -782,52 +805,17 @@ impl Database {
             ))
         })?;
 
-        let mut entities = Vec::new();
+        let mut entities = Vec::with_capacity(names.len());
         for row in rows {
             let (name, entity_type, obs_json) = row?;
-            let observations: Vec<String> = serde_json::from_str(&obs_json)?;
+            let observations: Vec<String> = serde_json::from_str(&obs_json)
+                .with_context(|| format!("Corrupted observations for entity '{}'", name))?;
             entities.push(Entity {
                 name,
                 entity_type,
                 observations,
             });
         }
-
-        // Get relations
-        let placeholders_from = build_placeholders(names.len(), 1);
-        let placeholders_to = build_placeholders(names.len(), names.len() + 1);
-
-        let query = format!(
-            "SELECT from_entity, to_entity, relation_type FROM relations
-             WHERE from_entity IN ({}) AND to_entity IN ({})",
-            placeholders_from, placeholders_to
-        );
-
-        let mut params: Vec<&dyn rusqlite::ToSql> = Vec::new();
-        for name in names {
-            params.push(name);
-        }
-        for name in names {
-            params.push(name);
-        }
-
-        let mut stmt = conn.prepare(&query)?;
-        let rows = stmt.query_map(params.as_slice(), |row| {
-            Ok(Relation {
-                from: row.get(0)?,
-                to: row.get(1)?,
-                relation_type: row.get(2)?,
-            })
-        })?;
-
-        let mut relations = Vec::new();
-        for row in rows {
-            relations.push(row?);
-        }
-
-        Ok(KnowledgeGraph {
-            entities,
-            relations,
-        })
+        Ok(entities)
     }
 }
