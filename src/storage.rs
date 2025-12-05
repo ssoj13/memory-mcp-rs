@@ -92,8 +92,10 @@ fn sanitize_fts5_query(query: &str) -> String {
     query
         .split_whitespace()
         .map(|term| {
+            // Strip existing quotes to avoid triple-quoting issues
+            let stripped = term.trim_matches('"');
             // Escape internal quotes by doubling them
-            let escaped = term.replace('"', "\"\"");
+            let escaped = stripped.replace('"', "\"\"");
             format!("\"{}\"", escaped)
         })
         .collect::<Vec<_>>()
@@ -421,12 +423,13 @@ impl Database {
     }
 
     /// Delete entities (cascade delete via FOREIGN KEY)
+    /// Wrapped in transaction for atomicity when deleting multiple entities
     pub fn delete_entities(&self, names: &[String]) -> Result<usize> {
         if names.is_empty() {
             return Ok(0);
         }
 
-        // Validate all entity names
+        // Validate all entity names before starting transaction
         for name in names {
             validate_name(name, "Entity name")?;
         }
@@ -436,17 +439,24 @@ impl Database {
             .get()
             .context("Failed to get database connection from pool")?;
 
+        let tx = conn
+            .unchecked_transaction()
+            .context("Failed to start transaction for deleting entities")?;
+
         let placeholders = build_placeholders(names.len(), 1);
         let query = format!("DELETE FROM entities WHERE name IN ({})", placeholders);
 
         let params: Vec<&dyn rusqlite::ToSql> =
             names.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
 
-        let count = conn
+        let count = tx
             .execute(&query, params.as_slice())
             .context(format!("Failed to delete {} entities", names.len()))?;
 
         // FOREIGN KEY CASCADE auto-deletes relations!
+
+        tx.commit()
+            .context("Failed to commit transaction for deleting entities")?;
 
         Ok(count)
     }
@@ -565,8 +575,26 @@ impl Database {
 
     /// Read entire graph
     pub fn read_graph(&self) -> Result<KnowledgeGraph> {
-        let conn = self.pool.get()?;
-        let mut entities = Vec::new();
+        let conn = self
+            .pool
+            .get()
+            .context("Failed to get database connection from pool")?;
+
+        let entities = self
+            .read_all_entities(&conn)
+            .context("Failed to read entities")?;
+        let relations = self
+            .read_all_relations(&conn)
+            .context("Failed to read relations")?;
+
+        Ok(KnowledgeGraph {
+            entities,
+            relations,
+        })
+    }
+
+    /// Helper: read all entities from database
+    fn read_all_entities(&self, conn: &Connection) -> Result<Vec<Entity>> {
         let mut stmt = conn.prepare("SELECT name, entity_type, observations FROM entities")?;
         let rows = stmt.query_map([], |row| {
             Ok((
@@ -576,17 +604,22 @@ impl Database {
             ))
         })?;
 
+        let mut entities = Vec::new();
         for row in rows {
             let (name, entity_type, obs_json) = row?;
-            let observations: Vec<String> = serde_json::from_str(&obs_json)?;
+            let observations: Vec<String> = serde_json::from_str(&obs_json)
+                .with_context(|| format!("Corrupted observations for entity '{}'", name))?;
             entities.push(Entity {
                 name,
                 entity_type,
                 observations,
             });
         }
+        Ok(entities)
+    }
 
-        let mut relations = Vec::new();
+    /// Helper: read all relations from database
+    fn read_all_relations(&self, conn: &Connection) -> Result<Vec<Relation>> {
         let mut stmt =
             conn.prepare("SELECT from_entity, to_entity, relation_type FROM relations")?;
         let rows = stmt.query_map([], |row| {
@@ -597,9 +630,38 @@ impl Database {
             })
         })?;
 
+        let mut relations = Vec::new();
         for row in rows {
             relations.push(row?);
         }
+        Ok(relations)
+    }
+
+    /// Search using FTS5 full-text search
+    pub fn search_nodes(&self, query: Option<&str>) -> Result<KnowledgeGraph> {
+        // No query or empty query = return full graph
+        let trimmed = query.map(|q| q.trim()).unwrap_or("");
+        if trimmed.is_empty() {
+            return self.read_graph();
+        }
+
+        let conn = self
+            .pool
+            .get()
+            .context("Failed to get database connection from pool")?;
+
+        // Sanitize query to prevent FTS5 syntax errors
+        let safe_query = sanitize_fts5_query(trimmed);
+
+        // FTS5 search - much faster than LIKE for text search
+        let entities = self
+            .search_entities_fts(&conn, &safe_query)
+            .context("Failed to search entities")?;
+
+        // Get relations only between found entities
+        let relations = self
+            .get_relations_between(&conn, &entities)
+            .context("Failed to get relations for search results")?;
 
         Ok(KnowledgeGraph {
             entities,
@@ -607,115 +669,84 @@ impl Database {
         })
     }
 
-    /// Search using FTS5 full-text search
-    pub fn search_nodes(&self, query: Option<&str>) -> Result<KnowledgeGraph> {
-        let conn = self
-            .pool
-            .get()
-            .context("Failed to get database connection from pool")?;
-        let entities = if let Some(q) = query {
-            // Empty query after trimming returns all entities
-            let trimmed = q.trim();
-            if trimmed.is_empty() {
-                return self.read_graph();
-            }
-
-            // Sanitize query to prevent FTS5 syntax errors
-            let safe_query = sanitize_fts5_query(trimmed);
-
-            // FTS5 search - much faster than LIKE for text search
-            let mut stmt = conn
-                .prepare(
-                    "SELECT e.name, e.entity_type, e.observations
+    /// Helper: search entities using FTS5
+    fn search_entities_fts(&self, conn: &Connection, fts_query: &str) -> Result<Vec<Entity>> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT e.name, e.entity_type, e.observations
                  FROM entities e
                  INNER JOIN entities_fts fts ON e.rowid = fts.rowid
                  WHERE entities_fts MATCH ?1",
-                )
-                .context("Failed to prepare FTS5 search query")?;
+            )
+            .context("Failed to prepare FTS5 search query")?;
 
-            let rows = stmt.query_map(params![safe_query], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })?;
+        let rows = stmt.query_map(params![fts_query], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
 
-            let mut entities = Vec::new();
-            for row in rows {
-                let (name, entity_type, obs_json) = row?;
-                let observations: Vec<String> = serde_json::from_str(&obs_json)?;
-                entities.push(Entity {
-                    name,
-                    entity_type,
-                    observations,
-                });
-            }
-            entities
-        } else {
-            // All entities - direct read without extra call
-            let mut stmt = conn.prepare("SELECT name, entity_type, observations FROM entities")?;
-            let rows = stmt.query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })?;
+        let mut entities = Vec::new();
+        for row in rows {
+            let (name, entity_type, obs_json) = row?;
+            let observations: Vec<String> = serde_json::from_str(&obs_json)
+                .with_context(|| format!("Corrupted observations for entity '{}'", name))?;
+            entities.push(Entity {
+                name,
+                entity_type,
+                observations,
+            });
+        }
+        Ok(entities)
+    }
 
-            let mut entities = Vec::new();
-            for row in rows {
-                let (name, entity_type, obs_json) = row?;
-                let observations: Vec<String> = serde_json::from_str(&obs_json)?;
-                entities.push(Entity {
-                    name,
-                    entity_type,
-                    observations,
-                });
-            }
-            entities
-        };
-
-        // Filter relations (only between found entities)
-        let entity_names: std::collections::HashSet<_> = entities.iter().map(|e| &e.name).collect();
-
-        let mut relations = Vec::new();
-        if !entity_names.is_empty() {
-            let placeholders_from = build_placeholders(entity_names.len(), 1);
-            let placeholders_to = build_placeholders(entity_names.len(), entity_names.len() + 1);
-
-            let query = format!(
-                "SELECT from_entity, to_entity, relation_type FROM relations
-                 WHERE from_entity IN ({}) AND to_entity IN ({})",
-                placeholders_from, placeholders_to
-            );
-
-            let mut params: Vec<&dyn rusqlite::ToSql> = Vec::new();
-            for name in &entity_names {
-                params.push(name);
-            }
-            for name in &entity_names {
-                params.push(name);
-            }
-
-            let mut stmt = conn.prepare(&query)?;
-            let rows = stmt.query_map(params.as_slice(), |row| {
-                Ok(Relation {
-                    from: row.get(0)?,
-                    to: row.get(1)?,
-                    relation_type: row.get(2)?,
-                })
-            })?;
-
-            for row in rows {
-                relations.push(row?);
-            }
+    /// Helper: get relations where BOTH from and to are in the given entities
+    fn get_relations_between(
+        &self,
+        conn: &Connection,
+        entities: &[Entity],
+    ) -> Result<Vec<Relation>> {
+        if entities.is_empty() {
+            return Ok(Vec::new());
         }
 
-        Ok(KnowledgeGraph {
-            entities,
-            relations,
-        })
+        let entity_names: std::collections::HashSet<_> =
+            entities.iter().map(|e| &e.name).collect();
+
+        let placeholders_from = build_placeholders(entity_names.len(), 1);
+        let placeholders_to = build_placeholders(entity_names.len(), entity_names.len() + 1);
+
+        let query = format!(
+            "SELECT from_entity, to_entity, relation_type FROM relations
+             WHERE from_entity IN ({}) AND to_entity IN ({})",
+            placeholders_from, placeholders_to
+        );
+
+        // Build params: first all names for FROM, then all names for TO
+        let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(entity_names.len() * 2);
+        for name in &entity_names {
+            params.push(*name);
+        }
+        for name in &entity_names {
+            params.push(*name);
+        }
+
+        let mut stmt = conn.prepare(&query)?;
+        let rows = stmt.query_map(params.as_slice(), |row| {
+            Ok(Relation {
+                from: row.get(0)?,
+                to: row.get(1)?,
+                relation_type: row.get(2)?,
+            })
+        })?;
+
+        let mut relations = Vec::new();
+        for row in rows {
+            relations.push(row?);
+        }
+        Ok(relations)
     }
 
     /// Open specific nodes
