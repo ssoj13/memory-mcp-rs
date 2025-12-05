@@ -84,7 +84,36 @@ impl MemoryServer {
     /// Create new entities in knowledge graph
     #[tool(
         name = "create_entities",
-        description = "Create multiple new entities in the knowledge graph"
+        description = "Create multiple new entities in the knowledge graph.
+
+Input schema:
+{
+  \"entities\": [
+    {
+      \"name\": \"entity-unique-id\",
+      \"entityType\": \"person|organization|project|concept|...\",
+      \"observations\": [\"fact 1 about entity\", \"fact 2 about entity\"]
+    }
+  ]
+}
+
+Example - create a person and a company:
+{
+  \"entities\": [
+    {
+      \"name\": \"John_Smith\",
+      \"entityType\": \"person\",
+      \"observations\": [\"Software engineer at TechCorp\", \"Expert in Rust programming\"]
+    },
+    {
+      \"name\": \"TechCorp\",
+      \"entityType\": \"organization\",
+      \"observations\": [\"Technology company founded in 2020\", \"Headquarters in San Francisco\"]
+    }
+  ]
+}
+
+IMPORTANT: Use 'entityType' (camelCase), NOT 'entity_type'."
     )]
     async fn create_entities(
         &self,
@@ -109,7 +138,36 @@ impl MemoryServer {
     /// Create relations between entities
     #[tool(
         name = "create_relations",
-        description = "Create multiple new relations between entities in the knowledge graph"
+        description = "Create multiple new relations between entities in the knowledge graph.
+
+Input schema:
+{
+  \"relations\": [
+    {
+      \"from\": \"source-entity-name\",
+      \"to\": \"target-entity-name\",
+      \"relationType\": \"works_at|knows|related_to|manages|owns|...\"
+    }
+  ]
+}
+
+Example - create employment and friendship relations:
+{
+  \"relations\": [
+    {
+      \"from\": \"John_Smith\",
+      \"to\": \"TechCorp\",
+      \"relationType\": \"works_at\"
+    },
+    {
+      \"from\": \"John_Smith\",
+      \"to\": \"Jane_Doe\",
+      \"relationType\": \"knows\"
+    }
+  ]
+}
+
+IMPORTANT: Use 'relationType' (camelCase), NOT 'relation_type'. Both 'from' and 'to' entities must exist."
     )]
     async fn create_relations(
         &self,
@@ -134,7 +192,36 @@ impl MemoryServer {
     /// Add observations to entities
     #[tool(
         name = "add_observations",
-        description = "Add new observations to existing entities in the knowledge graph (batch operation)"
+        description = "Add new observations to existing entities in the knowledge graph (batch operation).
+
+Input schema:
+{
+  \"observations\": [
+    {
+      \"entityName\": \"existing-entity-name\",
+      \"contents\": [\"new fact 1\", \"new fact 2\"]
+    }
+  ]
+}
+
+Example - add observations to multiple entities:
+{
+  \"observations\": [
+    {
+      \"entityName\": \"John_Smith\",
+      \"contents\": [\"Promoted to senior engineer in 2024\", \"Completed AWS certification\"]
+    },
+    {
+      \"entityName\": \"TechCorp\",
+      \"contents\": [\"Opened new office in Austin\"]
+    }
+  ]
+}
+
+CRITICAL field names:
+- Use 'entityName' (camelCase), NOT 'entity_name' or 'entity'
+- Use 'contents' (array of strings), NOT 'observation' or 'content'
+- The entity specified by 'entityName' must already exist"
     )]
     async fn add_observations(
         &self,
@@ -161,7 +248,19 @@ impl MemoryServer {
     /// Delete entities and their relations
     #[tool(
         name = "delete_entities",
-        description = "Delete entities and their associated relations from the knowledge graph"
+        description = "Delete entities and their associated relations from the knowledge graph.
+
+Input schema:
+{
+  \"entity_names\": [\"entity-name-1\", \"entity-name-2\"]
+}
+
+Example - delete multiple entities:
+{
+  \"entity_names\": [\"John_Smith\", \"Old_Project\"]
+}
+
+Note: All relations involving deleted entities are automatically removed (cascade delete)."
     )]
     async fn delete_entities(
         &self,
@@ -182,7 +281,33 @@ impl MemoryServer {
     /// Delete observations from entities
     #[tool(
         name = "delete_observations",
-        description = "Delete specific observations from entities in the knowledge graph (batch operation)"
+        description = "Delete specific observations from entities in the knowledge graph (batch operation).
+
+Input schema:
+{
+  \"deletions\": [
+    {
+      \"entityName\": \"existing-entity-name\",
+      \"observations\": [\"exact observation text to delete\"]
+    }
+  ]
+}
+
+Example - remove outdated observations:
+{
+  \"deletions\": [
+    {
+      \"entityName\": \"John_Smith\",
+      \"observations\": [\"Works at OldCompany\", \"Junior developer\"]
+    },
+    {
+      \"entityName\": \"TechCorp\",
+      \"observations\": [\"Startup phase\"]
+    }
+  ]
+}
+
+IMPORTANT: Use 'entityName' (camelCase), NOT 'entity_name'. Observation text must match exactly."
     )]
     async fn delete_observations(
         &self,
@@ -201,7 +326,31 @@ impl MemoryServer {
     /// Delete relations
     #[tool(
         name = "delete_relations",
-        description = "Delete specific relations from the knowledge graph"
+        description = "Delete specific relations from the knowledge graph.
+
+Input schema:
+{
+  \"relations\": [
+    {
+      \"from\": \"source-entity-name\",
+      \"to\": \"target-entity-name\",
+      \"relationType\": \"relation-type-to-delete\"
+    }
+  ]
+}
+
+Example - remove outdated relations:
+{
+  \"relations\": [
+    {
+      \"from\": \"John_Smith\",
+      \"to\": \"OldCompany\",
+      \"relationType\": \"works_at\"
+    }
+  ]
+}
+
+IMPORTANT: Use 'relationType' (camelCase), NOT 'relation_type'. All three fields must match exactly."
     )]
     async fn delete_relations(
         &self,
@@ -222,7 +371,21 @@ impl MemoryServer {
     /// Read entire knowledge graph
     #[tool(
         name = "read_graph",
-        description = "Read the entire knowledge graph"
+        description = "Read the entire knowledge graph.
+
+No input required - call with empty object: {}
+
+Returns:
+{
+  \"entities\": [
+    {\"name\": \"...\", \"entityType\": \"...\", \"observations\": [\"...\"]}
+  ],
+  \"relations\": [
+    {\"from\": \"...\", \"to\": \"...\", \"relationType\": \"...\"}
+  ]
+}
+
+Use this to get a complete snapshot of all stored knowledge."
     )]
     async fn read_graph(&self) -> Result<CallToolResult, McpError> {
         let graph = self
@@ -248,7 +411,24 @@ impl MemoryServer {
     /// Search nodes by query
     #[tool(
         name = "search_nodes",
-        description = "Search for nodes in the knowledge graph using full-text search. Searches across entity names, types, and observations."
+        description = "Search for nodes in the knowledge graph using full-text search. Searches across entity names, types, and observations.
+
+Input schema:
+{
+  \"query\": \"search terms\" | null
+}
+
+Example - find entities related to 'Rust':
+{
+  \"query\": \"Rust programming\"
+}
+
+Example - get all entities (empty/null query):
+{
+  \"query\": null
+}
+
+Returns matching entities and their relations. Uses SQLite FTS5 for efficient full-text search."
     )]
     async fn search_nodes(
         &self,
@@ -277,7 +457,19 @@ impl MemoryServer {
     /// Open specific nodes by names
     #[tool(
         name = "open_nodes",
-        description = "Open specific nodes in the knowledge graph by their names"
+        description = "Open specific nodes in the knowledge graph by their names.
+
+Input schema:
+{
+  \"names\": [\"entity-name-1\", \"entity-name-2\"]
+}
+
+Example - retrieve specific entities:
+{
+  \"names\": [\"John_Smith\", \"TechCorp\", \"Project_Alpha\"]
+}
+
+Returns the requested entities with all their observations, plus any relations between them."
     )]
     async fn open_nodes(
         &self,
