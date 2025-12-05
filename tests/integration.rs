@@ -1,4 +1,4 @@
-use memory_mcp_rs::graph::{Entity, Relation, ObservationInput, ObservationDeletion};
+use memory_mcp_rs::graph::{Entity, ObservationDeletion, ObservationInput, Relation};
 use memory_mcp_rs::manager::KnowledgeGraphManager;
 use tempfile::TempDir;
 
@@ -130,8 +130,12 @@ async fn test_add_observations() {
 
     let graph = manager.read_graph().await.unwrap();
     assert_eq!(graph.entities[0].observations.len(), 2);
-    assert!(graph.entities[0].observations.contains(&"Works at Acme".to_string()));
-    assert!(graph.entities[0].observations.contains(&"Lives in Paris".to_string()));
+    assert!(graph.entities[0]
+        .observations
+        .contains(&"Works at Acme".to_string()));
+    assert!(graph.entities[0]
+        .observations
+        .contains(&"Lives in Paris".to_string()));
 }
 
 #[tokio::test]
@@ -167,7 +171,10 @@ async fn test_cascade_delete() {
         .unwrap();
 
     // Delete Alice (should cascade delete relation)
-    let count = manager.delete_entities(vec!["Alice".to_string()]).await.unwrap();
+    let count = manager
+        .delete_entities(vec!["Alice".to_string()])
+        .await
+        .unwrap();
     assert_eq!(count, 1);
 
     let graph = manager.read_graph().await.unwrap();
@@ -185,10 +192,7 @@ async fn test_delete_observations() {
         .create_entities(vec![Entity {
             name: "Alice".to_string(),
             entity_type: "person".to_string(),
-            observations: vec![
-                "Works at Acme".to_string(),
-                "Lives in Paris".to_string(),
-            ],
+            observations: vec!["Works at Acme".to_string(), "Lives in Paris".to_string()],
         }])
         .await
         .unwrap();
@@ -277,12 +281,18 @@ async fn test_search_nodes() {
         .unwrap();
 
     // Search by observation
-    let result = manager.search_nodes(Some("Paris".to_string())).await.unwrap();
+    let result = manager
+        .search_nodes(Some("Paris".to_string()))
+        .await
+        .unwrap();
     assert_eq!(result.entities.len(), 1);
     assert_eq!(result.entities[0].name, "Alice");
 
     // Search by type
-    let result = manager.search_nodes(Some("person".to_string())).await.unwrap();
+    let result = manager
+        .search_nodes(Some("person".to_string()))
+        .await
+        .unwrap();
     assert_eq!(result.entities.len(), 2);
 
     // Search all
@@ -332,7 +342,6 @@ async fn test_open_nodes() {
 #[tokio::test]
 async fn test_persistence() {
     let (_dir, path) = create_temp_db();
-    let path = path;
 
     // Create and populate graph
     {
@@ -365,11 +374,13 @@ async fn test_validation_empty_entity_name() {
     let (_dir, path) = create_temp_db();
     let manager = KnowledgeGraphManager::new(path).unwrap();
 
-    let result = manager.create_entities(vec![Entity {
-        name: "".to_string(), // Empty name
-        entity_type: "person".to_string(),
-        observations: vec![],
-    }]).await;
+    let result = manager
+        .create_entities(vec![Entity {
+            name: "".to_string(), // Empty name
+            entity_type: "person".to_string(),
+            observations: vec![],
+        }])
+        .await;
 
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("cannot be empty"));
@@ -381,11 +392,13 @@ async fn test_validation_entity_name_too_long() {
     let manager = KnowledgeGraphManager::new(path).unwrap();
 
     let long_name = "A".repeat(257); // Max is 256
-    let result = manager.create_entities(vec![Entity {
-        name: long_name,
-        entity_type: "person".to_string(),
-        observations: vec![],
-    }]).await;
+    let result = manager
+        .create_entities(vec![Entity {
+            name: long_name,
+            entity_type: "person".to_string(),
+            observations: vec![],
+        }])
+        .await;
 
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("too long"));
@@ -397,14 +410,19 @@ async fn test_validation_entity_name_invalid_chars() {
     let manager = KnowledgeGraphManager::new(path).unwrap();
 
     // Control character (null byte)
-    let result = manager.create_entities(vec![Entity {
-        name: "Alice\0Bob".to_string(),
-        entity_type: "person".to_string(),
-        observations: vec![],
-    }]).await;
+    let result = manager
+        .create_entities(vec![Entity {
+            name: "Alice\0Bob".to_string(),
+            entity_type: "person".to_string(),
+            observations: vec![],
+        }])
+        .await;
 
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("invalid characters"));
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("invalid characters"));
 }
 
 #[tokio::test]
@@ -413,14 +431,19 @@ async fn test_validation_entity_type_invalid_chars() {
     let manager = KnowledgeGraphManager::new(path).unwrap();
 
     // Space is not allowed in types
-    let result = manager.create_entities(vec![Entity {
-        name: "Alice".to_string(),
-        entity_type: "per son".to_string(), // Space not allowed
-        observations: vec![],
-    }]).await;
+    let result = manager
+        .create_entities(vec![Entity {
+            name: "Alice".to_string(),
+            entity_type: "per son".to_string(), // Space not allowed
+            observations: vec![],
+        }])
+        .await;
 
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("invalid characters"));
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("invalid characters"));
 }
 
 #[tokio::test]
@@ -429,11 +452,13 @@ async fn test_validation_observation_too_long() {
     let manager = KnowledgeGraphManager::new(path).unwrap();
 
     let long_obs = "A".repeat(4097); // Max is 4096
-    let result = manager.create_entities(vec![Entity {
-        name: "Alice".to_string(),
-        entity_type: "person".to_string(),
-        observations: vec![long_obs],
-    }]).await;
+    let result = manager
+        .create_entities(vec![Entity {
+            name: "Alice".to_string(),
+            entity_type: "person".to_string(),
+            observations: vec![long_obs],
+        }])
+        .await;
 
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("too long"));
@@ -445,24 +470,29 @@ async fn test_validation_relation_type_valid() {
     let manager = KnowledgeGraphManager::new(path).unwrap();
 
     // Valid type with allowed characters
-    manager.create_entities(vec![
-        Entity {
-            name: "Alice".to_string(),
-            entity_type: "person".to_string(),
-            observations: vec![],
-        },
-        Entity {
-            name: "Bob".to_string(),
-            entity_type: "person".to_string(),
-            observations: vec![],
-        },
-    ]).await.unwrap();
+    manager
+        .create_entities(vec![
+            Entity {
+                name: "Alice".to_string(),
+                entity_type: "person".to_string(),
+                observations: vec![],
+            },
+            Entity {
+                name: "Bob".to_string(),
+                entity_type: "person".to_string(),
+                observations: vec![],
+            },
+        ])
+        .await
+        .unwrap();
 
-    let result = manager.create_relations(vec![Relation {
-        from: "Alice".to_string(),
-        to: "Bob".to_string(),
-        relation_type: "work-relation:knows_v1.0".to_string(), // Valid: alphanumeric + -_.:
-    }]).await;
+    let result = manager
+        .create_relations(vec![Relation {
+            from: "Alice".to_string(),
+            to: "Bob".to_string(),
+            relation_type: "work-relation:knows_v1.0".to_string(), // Valid: alphanumeric + -_.:
+        }])
+        .await;
 
     assert!(result.is_ok());
 }
@@ -476,21 +506,27 @@ async fn test_fts5_phrase_search() {
     let (_dir, path) = create_temp_db();
     let manager = KnowledgeGraphManager::new(path).unwrap();
 
-    manager.create_entities(vec![
-        Entity {
-            name: "Alice".to_string(),
-            entity_type: "person".to_string(),
-            observations: vec!["Works at Acme Corporation".to_string()],
-        },
-        Entity {
-            name: "Bob".to_string(),
-            entity_type: "person".to_string(),
-            observations: vec!["Works for different company".to_string()],
-        },
-    ]).await.unwrap();
+    manager
+        .create_entities(vec![
+            Entity {
+                name: "Alice".to_string(),
+                entity_type: "person".to_string(),
+                observations: vec!["Works at Acme Corporation".to_string()],
+            },
+            Entity {
+                name: "Bob".to_string(),
+                entity_type: "person".to_string(),
+                observations: vec!["Works for different company".to_string()],
+            },
+        ])
+        .await
+        .unwrap();
 
     // FTS5 phrase search with quotes
-    let result = manager.search_nodes(Some("\"Acme Corporation\"".to_string())).await.unwrap();
+    let result = manager
+        .search_nodes(Some("\"Acme Corporation\"".to_string()))
+        .await
+        .unwrap();
     assert_eq!(result.entities.len(), 1);
     assert_eq!(result.entities[0].name, "Alice");
 }
@@ -500,21 +536,27 @@ async fn test_fts5_multi_word_search() {
     let (_dir, path) = create_temp_db();
     let manager = KnowledgeGraphManager::new(path).unwrap();
 
-    manager.create_entities(vec![
-        Entity {
-            name: "Alice".to_string(),
-            entity_type: "person".to_string(),
-            observations: vec!["Senior software engineer at Google".to_string()],
-        },
-        Entity {
-            name: "Bob".to_string(),
-            entity_type: "person".to_string(),
-            observations: vec!["Junior developer at Microsoft".to_string()],
-        },
-    ]).await.unwrap();
+    manager
+        .create_entities(vec![
+            Entity {
+                name: "Alice".to_string(),
+                entity_type: "person".to_string(),
+                observations: vec!["Senior software engineer at Google".to_string()],
+            },
+            Entity {
+                name: "Bob".to_string(),
+                entity_type: "person".to_string(),
+                observations: vec!["Junior developer at Microsoft".to_string()],
+            },
+        ])
+        .await
+        .unwrap();
 
     // Search for multiple words (FTS5 tokenizes them)
-    let result = manager.search_nodes(Some("software engineer".to_string())).await.unwrap();
+    let result = manager
+        .search_nodes(Some("software engineer".to_string()))
+        .await
+        .unwrap();
     assert_eq!(result.entities.len(), 1);
     assert_eq!(result.entities[0].name, "Alice");
 }
@@ -554,10 +596,12 @@ async fn test_error_context_entity_not_found() {
     let manager = KnowledgeGraphManager::new(path).unwrap();
 
     // Try to add observation to non-existent entity
-    let result = manager.add_observations(vec![ObservationInput {
-        entity_name: "NonExistent".to_string(),
-        contents: vec!["test".to_string()],
-    }]).await;
+    let result = manager
+        .add_observations(vec![ObservationInput {
+            entity_name: "NonExistent".to_string(),
+            contents: vec!["test".to_string()],
+        }])
+        .await;
 
     assert!(result.is_err());
     let err_msg = result.unwrap_err().to_string();
@@ -571,18 +615,23 @@ async fn test_error_context_relation_missing_entities() {
     let manager = KnowledgeGraphManager::new(path).unwrap();
 
     // Create only one entity
-    manager.create_entities(vec![Entity {
-        name: "Alice".to_string(),
-        entity_type: "person".to_string(),
-        observations: vec![],
-    }]).await.unwrap();
+    manager
+        .create_entities(vec![Entity {
+            name: "Alice".to_string(),
+            entity_type: "person".to_string(),
+            observations: vec![],
+        }])
+        .await
+        .unwrap();
 
     // Try to create relation to non-existent entity
-    let result = manager.create_relations(vec![Relation {
-        from: "Alice".to_string(),
-        to: "Bob".to_string(), // Bob doesn't exist
-        relation_type: "knows".to_string(),
-    }]).await;
+    let result = manager
+        .create_relations(vec![Relation {
+            from: "Alice".to_string(),
+            to: "Bob".to_string(), // Bob doesn't exist
+            relation_type: "knows".to_string(),
+        }])
+        .await;
 
     assert!(result.is_err());
     let err_msg = result.unwrap_err().to_string();

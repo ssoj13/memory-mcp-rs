@@ -1,6 +1,7 @@
-use std::process::{Command, Child};
-use std::time::Duration;
 use std::net::TcpListener;
+use std::process::{Child, Command};
+use std::time::Duration;
+use tempfile::TempDir;
 use tokio::time::sleep;
 
 /// Find an available port for testing
@@ -30,9 +31,17 @@ async fn wait_for_server(port: u16, timeout_secs: u64) -> bool {
 }
 
 /// Start server subprocess in stream mode
-fn start_server(port: u16) -> Child {
+fn start_server(port: u16, db_path: &str) -> Child {
     Command::new("cargo")
-        .args(&["run", "--", "-s", "-p", &port.to_string()])
+        .args([
+            "run",
+            "--",
+            "-s",
+            "-p",
+            &port.to_string(),
+            "--db-path",
+            db_path,
+        ])
         .spawn()
         .expect("Failed to start server")
 }
@@ -40,18 +49,20 @@ fn start_server(port: u16) -> Child {
 #[tokio::test]
 async fn test_http_server_health_check() {
     let port = find_available_port();
-    let mut server = start_server(port);
+    let db_dir = TempDir::new().expect("Failed to create tempdir");
+    let db_path = db_dir.path().join("test.db");
+    let mut server = start_server(port, db_path.to_str().unwrap());
 
     // Wait for server to be ready
     assert!(
-        wait_for_server(port, 10).await,
+        wait_for_server(port, 30).await,
         "Server failed to start within timeout"
     );
 
     // Test health endpoint
     let client = reqwest::Client::new();
     let response = client
-        .get(&format!("http://127.0.0.1:{}/health", port))
+        .get(format!("http://127.0.0.1:{}/health", port))
         .send()
         .await
         .expect("Failed to send request");
@@ -62,23 +73,26 @@ async fn test_http_server_health_check() {
 
     // Cleanup
     server.kill().expect("Failed to kill server");
+    let _ = server.wait();
 }
 
 #[tokio::test]
 async fn test_mcp_endpoint_accessible() {
     let port = find_available_port();
-    let mut server = start_server(port);
+    let db_dir = TempDir::new().expect("Failed to create tempdir");
+    let db_path = db_dir.path().join("test.db");
+    let mut server = start_server(port, db_path.to_str().unwrap());
 
     // Wait for server to be ready
     assert!(
-        wait_for_server(port, 10).await,
+        wait_for_server(port, 30).await,
         "Server failed to start within timeout"
     );
 
     // Test MCP endpoint exists (even if it rejects our request)
     let client = reqwest::Client::new();
     let response = client
-        .get(&format!("http://127.0.0.1:{}/mcp", port))
+        .get(format!("http://127.0.0.1:{}/mcp", port))
         .send()
         .await
         .expect("Failed to send request");
@@ -89,26 +103,39 @@ async fn test_mcp_endpoint_accessible() {
 
     // Cleanup
     server.kill().expect("Failed to kill server");
+    let _ = server.wait();
 }
 
 #[tokio::test]
 async fn test_custom_port_and_bind() {
     let port = find_available_port();
+    let db_dir = TempDir::new().expect("Failed to create tempdir");
+    let db_path = db_dir.path().join("test.db");
     let mut server = Command::new("cargo")
-        .args(&["run", "--", "-s", "-p", &port.to_string(), "-b", "127.0.0.1"])
+        .args([
+            "run",
+            "--",
+            "-s",
+            "-p",
+            &port.to_string(),
+            "-b",
+            "127.0.0.1",
+            "--db-path",
+            db_path.to_str().unwrap(),
+        ])
         .spawn()
         .expect("Failed to start server");
 
     // Wait for server to be ready
     assert!(
-        wait_for_server(port, 10).await,
+        wait_for_server(port, 30).await,
         "Server failed to start within timeout"
     );
 
     // Verify server responds on custom port
     let client = reqwest::Client::new();
     let response = client
-        .get(&format!("http://127.0.0.1:{}/health", port))
+        .get(format!("http://127.0.0.1:{}/health", port))
         .send()
         .await
         .expect("Failed to send request");
@@ -117,28 +144,41 @@ async fn test_custom_port_and_bind() {
 
     // Cleanup
     server.kill().expect("Failed to kill server");
+    let _ = server.wait();
 }
 
 #[tokio::test]
 async fn test_server_with_logging() {
     let port = find_available_port();
     let log_file = format!("test-memory-{}.log", port);
+    let db_dir = TempDir::new().expect("Failed to create tempdir");
+    let db_path = db_dir.path().join("test.db");
 
     let mut server = Command::new("cargo")
-        .args(&["run", "--", "-s", "-p", &port.to_string(), "-l", &log_file])
+        .args([
+            "run",
+            "--",
+            "-s",
+            "-p",
+            &port.to_string(),
+            "--db-path",
+            db_path.to_str().unwrap(),
+            "-l",
+            &log_file,
+        ])
         .spawn()
         .expect("Failed to start server");
 
     // Wait for server to be ready
     assert!(
-        wait_for_server(port, 10).await,
+        wait_for_server(port, 30).await,
         "Server failed to start within timeout"
     );
 
     // Make a request to generate log entries
     let client = reqwest::Client::new();
     client
-        .get(&format!("http://127.0.0.1:{}/health", port))
+        .get(format!("http://127.0.0.1:{}/health", port))
         .send()
         .await
         .expect("Failed to send request");
@@ -148,6 +188,7 @@ async fn test_server_with_logging() {
 
     // Cleanup server first
     server.kill().expect("Failed to kill server");
+    let _ = server.wait();
 
     // Wait a bit more for file operations
     sleep(Duration::from_millis(200)).await;

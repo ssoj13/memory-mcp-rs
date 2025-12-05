@@ -1,8 +1,10 @@
+use crate::graph::{
+    Entity, KnowledgeGraph, ObservationDeletion, ObservationInput, ObservationResult, Relation,
+};
+use crate::storage::Database;
+use anyhow::{Context, Result};
 use std::path::PathBuf;
 use std::sync::Arc;
-use anyhow::{Result, Context};
-use crate::storage::Database;
-use crate::graph::{Entity, Relation, KnowledgeGraph, ObservationInput, ObservationResult, ObservationDeletion};
 
 /// Manager for knowledge graph operations
 /// Provides async API wrapping SQLite database with proper blocking isolation
@@ -14,9 +16,7 @@ impl KnowledgeGraphManager {
     /// Create new manager with database at given path
     pub fn new(db_path: PathBuf) -> Result<Self> {
         let db = Database::open(&db_path)?;
-        Ok(Self {
-            db: Arc::new(db),
-        })
+        Ok(Self { db: Arc::new(db) })
     }
 
     /// Create entities (returns only newly created entities)
@@ -36,7 +36,10 @@ impl KnowledgeGraphManager {
     }
 
     /// Add observations to multiple entities (batch operation)
-    pub async fn add_observations(&self, inputs: Vec<ObservationInput>) -> Result<Vec<ObservationResult>> {
+    pub async fn add_observations(
+        &self,
+        inputs: Vec<ObservationInput>,
+    ) -> Result<Vec<ObservationResult>> {
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || db.add_observations(&inputs))
             .await

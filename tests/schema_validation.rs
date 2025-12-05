@@ -8,7 +8,7 @@
 use schemars::JsonSchema;
 use serde_json::Value;
 
-use memory_mcp_rs::graph::{Entity, Relation, ObservationInput, ObservationDeletion};
+use memory_mcp_rs::graph::{Entity, ObservationDeletion, ObservationInput, Relation};
 
 /// Get schema as JSON Value for inspection
 fn get_schema<T: JsonSchema>() -> Value {
@@ -53,8 +53,14 @@ fn test_entity_schema_has_all_required_fields() {
     let schema = get_schema::<Entity>();
 
     assert!(schema_has_property(&schema, "name"), "Missing 'name'");
-    assert!(schema_has_property(&schema, "entityType"), "Missing 'entityType'");
-    assert!(schema_has_property(&schema, "observations"), "Missing 'observations'");
+    assert!(
+        schema_has_property(&schema, "entityType"),
+        "Missing 'entityType'"
+    );
+    assert!(
+        schema_has_property(&schema, "observations"),
+        "Missing 'observations'"
+    );
 }
 
 // ============================================================================
@@ -85,7 +91,10 @@ fn test_relation_schema_has_all_required_fields() {
 
     assert!(schema_has_property(&schema, "from"), "Missing 'from'");
     assert!(schema_has_property(&schema, "to"), "Missing 'to'");
-    assert!(schema_has_property(&schema, "relationType"), "Missing 'relationType'");
+    assert!(
+        schema_has_property(&schema, "relationType"),
+        "Missing 'relationType'"
+    );
 }
 
 // ============================================================================
@@ -132,8 +141,14 @@ fn test_observation_input_schema_has_contents_array() {
 fn test_observation_input_schema_all_fields() {
     let schema = get_schema::<ObservationInput>();
 
-    assert!(schema_has_property(&schema, "entityName"), "Missing 'entityName'");
-    assert!(schema_has_property(&schema, "contents"), "Missing 'contents'");
+    assert!(
+        schema_has_property(&schema, "entityName"),
+        "Missing 'entityName'"
+    );
+    assert!(
+        schema_has_property(&schema, "contents"),
+        "Missing 'contents'"
+    );
 
     // Verify contents is array type
     let contents_type = &schema["properties"]["contents"]["type"];
@@ -167,8 +182,14 @@ fn test_observation_deletion_schema_has_entity_name_camel_case() {
 fn test_observation_deletion_schema_all_fields() {
     let schema = get_schema::<ObservationDeletion>();
 
-    assert!(schema_has_property(&schema, "entityName"), "Missing 'entityName'");
-    assert!(schema_has_property(&schema, "observations"), "Missing 'observations'");
+    assert!(
+        schema_has_property(&schema, "entityName"),
+        "Missing 'entityName'"
+    );
+    assert!(
+        schema_has_property(&schema, "observations"),
+        "Missing 'observations'"
+    );
 }
 
 // ============================================================================
@@ -259,6 +280,7 @@ fn test_observation_input_required_fields() {
 
 /// Test the actual schema that MCP clients receive for add_observations
 /// This is the wrapper struct used in main.rs
+#[allow(dead_code)]
 #[derive(serde::Deserialize, JsonSchema)]
 struct AddObservationsArgs {
     observations: Vec<ObservationInput>,
@@ -317,6 +339,8 @@ fn test_print_observation_input_schema() {
     let pretty = serde_json::to_string_pretty(&schema).unwrap();
     println!("ObservationInput schema:\n{}", pretty);
 
-    // This test always passes - it's for debugging
-    assert!(true);
+    assert!(
+        !pretty.is_empty(),
+        "Pretty-printed schema for ObservationInput should not be empty"
+    );
 }

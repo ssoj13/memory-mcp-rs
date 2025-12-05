@@ -3,11 +3,11 @@ use std::sync::Arc;
 
 use clap::Parser;
 use rmcp::{
-    ErrorData as McpError, ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{CallToolResult, Content, Implementation, ServerCapabilities, ServerInfo},
     tool, tool_handler, tool_router,
     transport::stdio,
+    ErrorData as McpError, ServerHandler, ServiceExt,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -18,7 +18,7 @@ mod logging;
 mod manager;
 mod storage;
 
-use graph::{Entity, Relation, ObservationInput, ObservationDeletion};
+use graph::{Entity, ObservationDeletion, ObservationInput, Relation};
 use logging::{init_logging, TransportMode};
 use manager::KnowledgeGraphManager;
 
@@ -64,9 +64,7 @@ impl MemoryServer {
     fn server_info(&self) -> ServerInfo {
         ServerInfo {
             protocol_version: Default::default(),
-            capabilities: ServerCapabilities::builder()
-                .enable_tools()
-                .build(),
+            capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: Implementation {
                 name: "memory-mcp-rs".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
@@ -227,15 +225,13 @@ CRITICAL field names:
         &self,
         Parameters(args): Parameters<AddObservationsArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let results = self.manager
+        let results = self
+            .manager
             .add_observations(args.observations)
             .await
             .map_err(internal_err("Failed to add observations"))?;
 
-        let summary = format!(
-            "Added observations to {} entities",
-            results.len()
-        );
+        let summary = format!("Added observations to {} entities", results.len());
 
         Ok(CallToolResult {
             content: vec![Content::text(&summary)],
@@ -564,8 +560,8 @@ async fn run_stream_mode(
     bind: &str,
     port: u16,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use rmcp::transport::StreamableHttpService;
     use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+    use rmcp::transport::StreamableHttpService;
 
     let addr = format!("{}:{}", bind, port);
     tracing::info!("Starting MCP HTTP server on http://{}/mcp", addr);
@@ -598,18 +594,19 @@ async fn run_stream_mode(
 /// Extension validation is done in storage::Database::open()
 fn canonicalize_db_path(path: &std::path::Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
     // Canonicalize path to resolve .. and symlinks
-    let canonical = path.canonicalize().or_else(|_| -> Result<PathBuf, Box<dyn std::error::Error>> {
-        // If file doesn't exist yet, canonicalize parent and append filename
-        if let Some(parent) = path.parent() {
-            let filename = path.file_name()
-                .ok_or("Invalid path: no filename")?;
-            std::fs::create_dir_all(parent)?;
-            let canonical_parent = parent.canonicalize()?;
-            Ok(canonical_parent.join(filename))
-        } else {
-            Err("Invalid path: no parent directory".into())
-        }
-    })?;
+    let canonical =
+        path.canonicalize()
+            .or_else(|_| -> Result<PathBuf, Box<dyn std::error::Error>> {
+                // If file doesn't exist yet, canonicalize parent and append filename
+                if let Some(parent) = path.parent() {
+                    let filename = path.file_name().ok_or("Invalid path: no filename")?;
+                    std::fs::create_dir_all(parent)?;
+                    let canonical_parent = parent.canonicalize()?;
+                    Ok(canonical_parent.join(filename))
+                } else {
+                    Err("Invalid path: no parent directory".into())
+                }
+            })?;
 
     // Ensure path is absolute
     if !canonical.is_absolute() {
@@ -636,14 +633,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_logging(mode, args.log)?;
 
     // Get database path from args or environment or use default
-    let db_path = args.db_path.or_else(|| {
-        std::env::var("MEMORY_FILE_PATH").ok().map(PathBuf::from)
-    }).unwrap_or_else(|| {
-        let mut path = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("."));
-        path.push("mcp-memory");
-        path.push("knowledge_graph.db");
-        path
-    });
+    let db_path = args
+        .db_path
+        .or_else(|| std::env::var("MEMORY_FILE_PATH").ok().map(PathBuf::from))
+        .unwrap_or_else(|| {
+            let mut path = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("."));
+            path.push("mcp-memory");
+            path.push("knowledge_graph.db");
+            path
+        });
 
     // Create parent directories if needed
     if let Some(parent) = db_path.parent() {

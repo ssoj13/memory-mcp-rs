@@ -1,14 +1,16 @@
-use rusqlite::{params, OptionalExtension, Connection};
-use anyhow::{Result, Context, bail};
-use std::path::Path;
-use r2d2_sqlite::SqliteConnectionManager;
+use crate::graph::{
+    Entity, KnowledgeGraph, ObservationDeletion, ObservationInput, ObservationResult, Relation,
+};
+use anyhow::{bail, Context, Result};
 use r2d2::Pool;
-use crate::graph::{Entity, Relation, KnowledgeGraph, ObservationInput, ObservationResult, ObservationDeletion};
+use r2d2_sqlite::SqliteConnectionManager;
+use rusqlite::{params, Connection, OptionalExtension};
+use std::path::Path;
 
 // Validation constants (chosen for practical limits while preventing abuse)
-const MAX_NAME_LENGTH: usize = 256;      // Entity/relation names
-const MAX_TYPE_LENGTH: usize = 128;      // Type identifiers
-const MAX_OBSERVATION_LENGTH: usize = 4096;  // Individual observation text
+const MAX_NAME_LENGTH: usize = 256; // Entity/relation names
+const MAX_TYPE_LENGTH: usize = 128; // Type identifiers
+const MAX_OBSERVATION_LENGTH: usize = 4096; // Individual observation text
 
 /// Connection customizer to set PRAGMAs on every new connection
 #[derive(Debug)]
@@ -46,8 +48,14 @@ fn validate_type(type_str: &str, field: &str) -> Result<()> {
         bail!("{} too long (max {} chars)", field, MAX_TYPE_LENGTH);
     }
     // Only allow alphanumeric, dash, underscore, dot, colon (for namespaced types)
-    if !type_str.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.' || c == ':') {
-        bail!("{} contains invalid characters (only alphanumeric, -, _, ., : allowed)", field);
+    if !type_str
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.' || c == ':')
+    {
+        bail!(
+            "{} contains invalid characters (only alphanumeric, -, _, ., : allowed)",
+            field
+        );
     }
     Ok(())
 }
@@ -55,7 +63,10 @@ fn validate_type(type_str: &str, field: &str) -> Result<()> {
 /// Validate observation content
 fn validate_observation(obs: &str) -> Result<()> {
     if obs.len() > MAX_OBSERVATION_LENGTH {
-        bail!("Observation too long (max {} chars)", MAX_OBSERVATION_LENGTH);
+        bail!(
+            "Observation too long (max {} chars)",
+            MAX_OBSERVATION_LENGTH
+        );
     }
     // Check for null bytes (control characters in observations might be valid)
     if obs.contains('\0') {
@@ -73,9 +84,9 @@ fn build_placeholders(count: usize, offset: usize) -> String {
         .join(", ")
 }
 
-/// Escape FTS5 special characters in user query
-/// FTS5 syntax: AND, OR, NOT, quotes, parentheses, *, ^, NEAR
-/// We wrap each word in quotes to treat them as literals
+/// Escape FTS5 special characters in user query.
+/// NOTE: This intentionally disables FTS5 operators (OR/NEAR/*) by quoting each term,
+/// yielding a simple AND-of-words search to avoid syntax errors and injection.
 fn sanitize_fts5_query(query: &str) -> String {
     // Split on whitespace, quote each term, rejoin with space (implicit AND)
     query
@@ -177,7 +188,7 @@ impl Database {
         let manager = SqliteConnectionManager::file(path);
         let pool = Pool::builder()
             .max_size(15) // Allow up to 15 concurrent connections
-            .connection_customizer(Box::new(SqliteCustomizer))  // Apply PRAGMAs per-connection
+            .connection_customizer(Box::new(SqliteCustomizer)) // Apply PRAGMAs per-connection
             .build(manager)
             .context("Failed to create connection pool")?;
 
@@ -212,9 +223,12 @@ impl Database {
             }
         }
 
-        let conn = self.pool.get()
+        let conn = self
+            .pool
+            .get()
             .context("Failed to get database connection from pool")?;
-        let tx = conn.unchecked_transaction()
+        let tx = conn
+            .unchecked_transaction()
             .context("Failed to start transaction for creating entities")?;
         let mut new_entities = Vec::new();
 
@@ -226,14 +240,13 @@ impl Database {
 
             // INSERT OR IGNORE returns 0 if row already exists, 1 if inserted
             for entity in entities {
-                let obs_json = serde_json::to_string(&entity.observations)
-                    .context(format!("Failed to serialize observations for entity '{}'", entity.name))?;
-                let rows_affected = stmt.execute(params![
-                    &entity.name,
-                    &entity.entity_type,
-                    &obs_json,
-                ])
-                .with_context(|| format!("Failed to insert entity '{}'", entity.name))?;
+                let obs_json = serde_json::to_string(&entity.observations).context(format!(
+                    "Failed to serialize observations for entity '{}'",
+                    entity.name
+                ))?;
+                let rows_affected = stmt
+                    .execute(params![&entity.name, &entity.entity_type, &obs_json,])
+                    .with_context(|| format!("Failed to insert entity '{}'", entity.name))?;
 
                 // Track only newly inserted entities
                 if rows_affected > 0 {
@@ -262,9 +275,12 @@ impl Database {
             validate_type(&rel.relation_type, "Relation type")?;
         }
 
-        let conn = self.pool.get()
+        let conn = self
+            .pool
+            .get()
             .context("Failed to get database connection from pool")?;
-        let tx = conn.unchecked_transaction()
+        let tx = conn
+            .unchecked_transaction()
             .context("Failed to start transaction for creating relations")?;
         let mut new_relations = Vec::new();
 
@@ -291,15 +307,21 @@ impl Database {
                                 rel.from, rel.to, rel.relation_type
                             );
                         }
-                        return Err(err).with_context(|| format!(
-                            "Database error creating relation '{}' -> '{}'",
-                            rel.from, rel.to
-                        ));
+                        return Err(err).with_context(|| {
+                            format!(
+                                "Database error creating relation '{}' -> '{}'",
+                                rel.from, rel.to
+                            )
+                        });
                     }
-                    Err(e) => return Err(e).with_context(|| format!(
-                        "Failed to insert relation '{}' -> '{}' (type: '{}')",
-                        rel.from, rel.to, rel.relation_type
-                    )),
+                    Err(e) => {
+                        return Err(e).with_context(|| {
+                            format!(
+                                "Failed to insert relation '{}' -> '{}' (type: '{}')",
+                                rel.from, rel.to, rel.relation_type
+                            )
+                        })
+                    }
                 }
             }
         }
@@ -320,30 +342,43 @@ impl Database {
             }
         }
 
-        let conn = self.pool.get()
+        let conn = self
+            .pool
+            .get()
             .context("Failed to get database connection from pool")?;
-        let tx = conn.unchecked_transaction()
+        let tx = conn
+            .unchecked_transaction()
             .context("Failed to start transaction for adding observations")?;
         let mut results = Vec::new();
 
         for input in inputs {
             // Get current observations
-            let current: Option<String> = tx.query_row(
-                "SELECT observations FROM entities WHERE name = ?1",
-                params![&input.entity_name],
-                |row| row.get(0),
-            )
-            .optional()
-            .with_context(|| format!("Database error querying entity '{}'", input.entity_name))?;
+            let current: Option<String> = tx
+                .query_row(
+                    "SELECT observations FROM entities WHERE name = ?1",
+                    params![&input.entity_name],
+                    |row| row.get(0),
+                )
+                .optional()
+                .with_context(|| {
+                    format!("Database error querying entity '{}'", input.entity_name)
+                })?;
 
-            let current = current.with_context(|| format!(
-                "Cannot add observations: entity '{}' does not exist",
-                input.entity_name
-            ))?;
+            let current = current.with_context(|| {
+                format!(
+                    "Cannot add observations: entity '{}' does not exist",
+                    input.entity_name
+                )
+            })?;
 
             // Parse JSON array
-            let mut observations: Vec<String> = serde_json::from_str(&current)
-                .with_context(|| format!("Corrupted observations data for entity '{}'", input.entity_name))?;
+            let mut observations: Vec<String> =
+                serde_json::from_str(&current).with_context(|| {
+                    format!(
+                        "Corrupted observations data for entity '{}'",
+                        input.entity_name
+                    )
+                })?;
 
             // Track which observations are actually added
             let mut added = Vec::new();
@@ -356,13 +391,22 @@ impl Database {
 
             // Update only if something was added
             if !added.is_empty() {
-                let obs_json = serde_json::to_string(&observations)
-                    .with_context(|| format!("Failed to serialize observations for entity '{}'", input.entity_name))?;
+                let obs_json = serde_json::to_string(&observations).with_context(|| {
+                    format!(
+                        "Failed to serialize observations for entity '{}'",
+                        input.entity_name
+                    )
+                })?;
                 tx.execute(
                     "UPDATE entities SET observations = ?1 WHERE name = ?2",
                     params![&obs_json, &input.entity_name],
                 )
-                .with_context(|| format!("Failed to update observations for entity '{}'", input.entity_name))?;
+                .with_context(|| {
+                    format!(
+                        "Failed to update observations for entity '{}'",
+                        input.entity_name
+                    )
+                })?;
             }
 
             results.push(ObservationResult {
@@ -387,17 +431,19 @@ impl Database {
             validate_name(name, "Entity name")?;
         }
 
-        let conn = self.pool.get()
+        let conn = self
+            .pool
+            .get()
             .context("Failed to get database connection from pool")?;
 
         let placeholders = build_placeholders(names.len(), 1);
         let query = format!("DELETE FROM entities WHERE name IN ({})", placeholders);
 
-        let params: Vec<&dyn rusqlite::ToSql> = names.iter()
-            .map(|s| s as &dyn rusqlite::ToSql)
-            .collect();
+        let params: Vec<&dyn rusqlite::ToSql> =
+            names.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
 
-        let count = conn.execute(&query, params.as_slice())
+        let count = conn
+            .execute(&query, params.as_slice())
             .context(format!("Failed to delete {} entities", names.len()))?;
 
         // FOREIGN KEY CASCADE auto-deletes relations!
@@ -413,36 +459,58 @@ impl Database {
             validate_name(&deletion.entity_name, "Entity name")?;
         }
 
-        let conn = self.pool.get()
+        let conn = self
+            .pool
+            .get()
             .context("Failed to get database connection from pool")?;
-        let tx = conn.unchecked_transaction()
+        let tx = conn
+            .unchecked_transaction()
             .context("Failed to start transaction for deleting observations")?;
 
         for deletion in deletions {
-            let current: Option<String> = tx.query_row(
-                "SELECT observations FROM entities WHERE name = ?1",
-                params![&deletion.entity_name],
-                |row| row.get(0),
-            )
-            .optional()
-            .with_context(|| format!("Database error querying entity '{}'", deletion.entity_name))?;
+            let current: Option<String> = tx
+                .query_row(
+                    "SELECT observations FROM entities WHERE name = ?1",
+                    params![&deletion.entity_name],
+                    |row| row.get(0),
+                )
+                .optional()
+                .with_context(|| {
+                    format!("Database error querying entity '{}'", deletion.entity_name)
+                })?;
 
-            let current = current.with_context(|| format!(
-                "Cannot delete observations: entity '{}' does not exist",
-                deletion.entity_name
-            ))?;
+            let current = current.with_context(|| {
+                format!(
+                    "Cannot delete observations: entity '{}' does not exist",
+                    deletion.entity_name
+                )
+            })?;
 
-            let mut observations: Vec<String> = serde_json::from_str(&current)
-                .with_context(|| format!("Corrupted observations data for entity '{}'", deletion.entity_name))?;
+            let mut observations: Vec<String> =
+                serde_json::from_str(&current).with_context(|| {
+                    format!(
+                        "Corrupted observations data for entity '{}'",
+                        deletion.entity_name
+                    )
+                })?;
             observations.retain(|obs| !deletion.observations.contains(obs));
 
-            let obs_json = serde_json::to_string(&observations)
-                .with_context(|| format!("Failed to serialize observations for entity '{}'", deletion.entity_name))?;
+            let obs_json = serde_json::to_string(&observations).with_context(|| {
+                format!(
+                    "Failed to serialize observations for entity '{}'",
+                    deletion.entity_name
+                )
+            })?;
             tx.execute(
                 "UPDATE entities SET observations = ?1 WHERE name = ?2",
                 params![&obs_json, &deletion.entity_name],
             )
-            .with_context(|| format!("Failed to delete observations from entity '{}'", deletion.entity_name))?;
+            .with_context(|| {
+                format!(
+                    "Failed to delete observations from entity '{}'",
+                    deletion.entity_name
+                )
+            })?;
         }
 
         tx.commit()
@@ -464,9 +532,12 @@ impl Database {
             validate_type(&rel.relation_type, "Relation type")?;
         }
 
-        let conn = self.pool.get()
+        let conn = self
+            .pool
+            .get()
             .context("Failed to get database connection from pool")?;
-        let tx = conn.unchecked_transaction()
+        let tx = conn
+            .unchecked_transaction()
             .context("Failed to start transaction for deleting relations")?;
         let mut count = 0;
 
@@ -476,11 +547,14 @@ impl Database {
             ).context("Failed to prepare delete statement for relations")?;
 
             for rel in relations {
-                count += stmt.execute(params![&rel.from, &rel.to, &rel.relation_type])
-                    .with_context(|| format!(
-                        "Failed to delete relation '{}' -> '{}' (type: '{}')",
-                        rel.from, rel.to, rel.relation_type
-                    ))?;
+                count += stmt
+                    .execute(params![&rel.from, &rel.to, &rel.relation_type])
+                    .with_context(|| {
+                        format!(
+                            "Failed to delete relation '{}' -> '{}' (type: '{}')",
+                            rel.from, rel.to, rel.relation_type
+                        )
+                    })?;
             }
         }
 
@@ -505,11 +579,16 @@ impl Database {
         for row in rows {
             let (name, entity_type, obs_json) = row?;
             let observations: Vec<String> = serde_json::from_str(&obs_json)?;
-            entities.push(Entity { name, entity_type, observations });
+            entities.push(Entity {
+                name,
+                entity_type,
+                observations,
+            });
         }
 
         let mut relations = Vec::new();
-        let mut stmt = conn.prepare("SELECT from_entity, to_entity, relation_type FROM relations")?;
+        let mut stmt =
+            conn.prepare("SELECT from_entity, to_entity, relation_type FROM relations")?;
         let rows = stmt.query_map([], |row| {
             Ok(Relation {
                 from: row.get(0)?,
@@ -522,12 +601,17 @@ impl Database {
             relations.push(row?);
         }
 
-        Ok(KnowledgeGraph { entities, relations })
+        Ok(KnowledgeGraph {
+            entities,
+            relations,
+        })
     }
 
     /// Search using FTS5 full-text search
     pub fn search_nodes(&self, query: Option<&str>) -> Result<KnowledgeGraph> {
-        let conn = self.pool.get()
+        let conn = self
+            .pool
+            .get()
             .context("Failed to get database connection from pool")?;
         let entities = if let Some(q) = query {
             // Empty query after trimming returns all entities
@@ -540,12 +624,14 @@ impl Database {
             let safe_query = sanitize_fts5_query(trimmed);
 
             // FTS5 search - much faster than LIKE for text search
-            let mut stmt = conn.prepare(
-                "SELECT e.name, e.entity_type, e.observations
+            let mut stmt = conn
+                .prepare(
+                    "SELECT e.name, e.entity_type, e.observations
                  FROM entities e
                  INNER JOIN entities_fts fts ON e.rowid = fts.rowid
-                 WHERE entities_fts MATCH ?1"
-            ).context("Failed to prepare FTS5 search query")?;
+                 WHERE entities_fts MATCH ?1",
+                )
+                .context("Failed to prepare FTS5 search query")?;
 
             let rows = stmt.query_map(params![safe_query], |row| {
                 Ok((
@@ -559,7 +645,11 @@ impl Database {
             for row in rows {
                 let (name, entity_type, obs_json) = row?;
                 let observations: Vec<String> = serde_json::from_str(&obs_json)?;
-                entities.push(Entity { name, entity_type, observations });
+                entities.push(Entity {
+                    name,
+                    entity_type,
+                    observations,
+                });
             }
             entities
         } else {
@@ -577,14 +667,17 @@ impl Database {
             for row in rows {
                 let (name, entity_type, obs_json) = row?;
                 let observations: Vec<String> = serde_json::from_str(&obs_json)?;
-                entities.push(Entity { name, entity_type, observations });
+                entities.push(Entity {
+                    name,
+                    entity_type,
+                    observations,
+                });
             }
             entities
         };
 
         // Filter relations (only between found entities)
-        let entity_names: std::collections::HashSet<_> =
-            entities.iter().map(|e| &e.name).collect();
+        let entity_names: std::collections::HashSet<_> = entities.iter().map(|e| &e.name).collect();
 
         let mut relations = Vec::new();
         if !entity_names.is_empty() {
@@ -619,7 +712,10 @@ impl Database {
             }
         }
 
-        Ok(KnowledgeGraph { entities, relations })
+        Ok(KnowledgeGraph {
+            entities,
+            relations,
+        })
     }
 
     /// Open specific nodes
@@ -643,9 +739,8 @@ impl Database {
             placeholders
         );
 
-        let params: Vec<&dyn rusqlite::ToSql> = names.iter()
-            .map(|s| s as &dyn rusqlite::ToSql)
-            .collect();
+        let params: Vec<&dyn rusqlite::ToSql> =
+            names.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
 
         let mut stmt = conn.prepare(&query)?;
         let rows = stmt.query_map(params.as_slice(), |row| {
@@ -660,7 +755,11 @@ impl Database {
         for row in rows {
             let (name, entity_type, obs_json) = row?;
             let observations: Vec<String> = serde_json::from_str(&obs_json)?;
-            entities.push(Entity { name, entity_type, observations });
+            entities.push(Entity {
+                name,
+                entity_type,
+                observations,
+            });
         }
 
         // Get relations
@@ -695,6 +794,9 @@ impl Database {
             relations.push(row?);
         }
 
-        Ok(KnowledgeGraph { entities, relations })
+        Ok(KnowledgeGraph {
+            entities,
+            relations,
+        })
     }
 }
