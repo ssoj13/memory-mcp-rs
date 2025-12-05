@@ -605,7 +605,8 @@ impl Database {
             ))
         })?;
 
-        let mut entities = Vec::new();
+        // Pre-allocate based on size hint from iterator
+        let mut entities = Vec::with_capacity(rows.size_hint().0);
         for row in rows {
             let (name, entity_type, obs_json) = row?;
             let observations: Vec<String> = serde_json::from_str(&obs_json)
@@ -631,7 +632,8 @@ impl Database {
             })
         })?;
 
-        let mut relations = Vec::new();
+        // Pre-allocate based on size hint from iterator
+        let mut relations = Vec::with_capacity(rows.size_hint().0);
         for row in rows {
             relations.push(row?);
         }
@@ -689,7 +691,8 @@ impl Database {
             ))
         })?;
 
-        let mut entities = Vec::new();
+        // Pre-allocate based on size hint from iterator
+        let mut entities = Vec::with_capacity(rows.size_hint().0);
         for row in rows {
             let (name, entity_type, obs_json) = row?;
             let observations: Vec<String> = serde_json::from_str(&obs_json)
@@ -742,7 +745,8 @@ impl Database {
             })
         })?;
 
-        let mut relations = Vec::new();
+        // Pre-allocate based on size hint from iterator
+        let mut relations = Vec::with_capacity(rows.size_hint().0);
         for row in rows {
             relations.push(row?);
         }
