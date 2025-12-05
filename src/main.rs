@@ -542,7 +542,7 @@ struct OpenNodesArgs {
 }
 
 // Helper for error conversion
-fn internal_err<T: ToString>(msg: &'static str) -> impl FnOnce(T) -> McpError + Clone {
+fn internal_err<T: ToString>(msg: &'static str) -> impl Fn(T) -> McpError {
     move |err| McpError::internal_error(msg, Some(json!({ "error": err.to_string() })))
 }
 
