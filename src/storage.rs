@@ -1,14 +1,26 @@
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, OptionalExtension, Connection};
 use anyhow::{Result, Context, bail};
 use std::path::Path;
 use r2d2_sqlite::SqliteConnectionManager;
 use r2d2::Pool;
 use crate::graph::{Entity, Relation, KnowledgeGraph, ObservationInput, ObservationResult, ObservationDeletion};
 
-// Validation constants
-const MAX_NAME_LENGTH: usize = 256;
-const MAX_TYPE_LENGTH: usize = 128;
-const MAX_OBSERVATION_LENGTH: usize = 4096;
+// Validation constants (chosen for practical limits while preventing abuse)
+const MAX_NAME_LENGTH: usize = 256;      // Entity/relation names
+const MAX_TYPE_LENGTH: usize = 128;      // Type identifiers
+const MAX_OBSERVATION_LENGTH: usize = 4096;  // Individual observation text
+
+/// Connection customizer to set PRAGMAs on every new connection
+#[derive(Debug)]
+struct SqliteCustomizer;
+
+impl r2d2::CustomizeConnection<Connection, rusqlite::Error> for SqliteCustomizer {
+    fn on_acquire(&self, conn: &mut Connection) -> std::result::Result<(), rusqlite::Error> {
+        // Enable FOREIGN KEY constraints (must be set per-connection, not persisted)
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+        Ok(())
+    }
+}
 
 /// Validate entity/relation name (alphanumeric, spaces, dashes, underscores, dots)
 fn validate_name(name: &str, field: &str) -> Result<()> {
@@ -59,6 +71,22 @@ fn build_placeholders(count: usize, offset: usize) -> String {
         .map(|i| format!("?{}", i))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Escape FTS5 special characters in user query
+/// FTS5 syntax: AND, OR, NOT, quotes, parentheses, *, ^, NEAR
+/// We wrap each word in quotes to treat them as literals
+fn sanitize_fts5_query(query: &str) -> String {
+    // Split on whitespace, quote each term, rejoin with space (implicit AND)
+    query
+        .split_whitespace()
+        .map(|term| {
+            // Escape internal quotes by doubling them
+            let escaped = term.replace('"', "\"\"");
+            format!("\"{}\"", escaped)
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Validate database file path
@@ -149,17 +177,15 @@ impl Database {
         let manager = SqliteConnectionManager::file(path);
         let pool = Pool::builder()
             .max_size(15) // Allow up to 15 concurrent connections
+            .connection_customizer(Box::new(SqliteCustomizer))  // Apply PRAGMAs per-connection
             .build(manager)
             .context("Failed to create connection pool")?;
 
-        // Initialize schema and pragmas on a connection
+        // Initialize schema on first connection (WAL mode persists in DB file)
         {
             let conn = pool.get().context("Failed to get connection from pool")?;
 
-            // Enable FOREIGN KEY constraints (off by default!)
-            conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-
-            // WAL mode for concurrent reads
+            // WAL mode for concurrent reads (persisted in DB, only need to set once)
             conn.execute_batch("PRAGMA journal_mode = WAL;")?;
 
             // Create schema
@@ -438,21 +464,28 @@ impl Database {
             validate_type(&rel.relation_type, "Relation type")?;
         }
 
-        let conn = self.pool.get()?;
-        let tx = conn.unchecked_transaction()?;
+        let conn = self.pool.get()
+            .context("Failed to get database connection from pool")?;
+        let tx = conn.unchecked_transaction()
+            .context("Failed to start transaction for deleting relations")?;
         let mut count = 0;
 
         {
             let mut stmt = tx.prepare_cached(
                 "DELETE FROM relations WHERE from_entity = ?1 AND to_entity = ?2 AND relation_type = ?3"
-            )?;
+            ).context("Failed to prepare delete statement for relations")?;
 
             for rel in relations {
-                count += stmt.execute(params![&rel.from, &rel.to, &rel.relation_type])?;
+                count += stmt.execute(params![&rel.from, &rel.to, &rel.relation_type])
+                    .with_context(|| format!(
+                        "Failed to delete relation '{}' -> '{}' (type: '{}')",
+                        rel.from, rel.to, rel.relation_type
+                    ))?;
             }
         }
 
-        tx.commit()?;
+        tx.commit()
+            .context("Failed to commit transaction for deleting relations")?;
         Ok(count)
     }
 
@@ -494,17 +527,27 @@ impl Database {
 
     /// Search using FTS5 full-text search
     pub fn search_nodes(&self, query: Option<&str>) -> Result<KnowledgeGraph> {
-        let conn = self.pool.get()?;
+        let conn = self.pool.get()
+            .context("Failed to get database connection from pool")?;
         let entities = if let Some(q) = query {
+            // Empty query after trimming returns all entities
+            let trimmed = q.trim();
+            if trimmed.is_empty() {
+                return self.read_graph();
+            }
+
+            // Sanitize query to prevent FTS5 syntax errors
+            let safe_query = sanitize_fts5_query(trimmed);
+
             // FTS5 search - much faster than LIKE for text search
             let mut stmt = conn.prepare(
                 "SELECT e.name, e.entity_type, e.observations
                  FROM entities e
                  INNER JOIN entities_fts fts ON e.rowid = fts.rowid
                  WHERE entities_fts MATCH ?1"
-            )?;
+            ).context("Failed to prepare FTS5 search query")?;
 
-            let rows = stmt.query_map(params![q], |row| {
+            let rows = stmt.query_map(params![safe_query], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,

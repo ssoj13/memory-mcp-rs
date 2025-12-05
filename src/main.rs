@@ -594,17 +594,9 @@ async fn run_stream_mode(
     Ok(())
 }
 
-/// Validate database path to prevent path traversal attacks
-fn validate_db_path(path: &std::path::Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    // Check file extension FIRST (before any filesystem operations)
-    if let Some(ext) = path.extension() {
-        if ext != "db" {
-            return Err("Invalid database file extension (must be .db)".into());
-        }
-    } else {
-        return Err("Database path must have .db extension".into());
-    }
-
+/// Canonicalize database path to prevent path traversal attacks
+/// Extension validation is done in storage::Database::open()
+fn canonicalize_db_path(path: &std::path::Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
     // Canonicalize path to resolve .. and symlinks
     let canonical = path.canonicalize().or_else(|_| -> Result<PathBuf, Box<dyn std::error::Error>> {
         // If file doesn't exist yet, canonicalize parent and append filename
@@ -658,8 +650,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::fs::create_dir_all(parent).await?;
     }
 
-    // Validate path to prevent traversal attacks
-    let db_path = validate_db_path(&db_path)?;
+    // Canonicalize path to prevent traversal attacks (extension validated in Database::open)
+    let db_path = canonicalize_db_path(&db_path)?;
 
     // Initialize manager
     let manager = Arc::new(KnowledgeGraphManager::new(db_path)?);
